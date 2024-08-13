@@ -1,83 +1,106 @@
-#include <Servo.h>           // Library for controlling servo motors
-#include "MS5837.h"          // Library for the MS5837 depth sensor
-#include <PID_v1.h>          // Library for the PID controller
-#include <Wire.h>            // Library for I2C communication
+//includes all the libraries
+#include <Servo.h>.    //servo  
+#include "MS5837.h".   //depth sensor 
+#include <PID_v1.h>.   //PID controller 
+#include <Wire.h>.     //I2C communication 
+
+// Constants
+const double DEPTH_SETPOINT_DEFAULT = 0.5;    //this is the manually set depth that the PID will use to compare and readjust  
+const int SERVO_CENTER = 1500;    //this is the initial servo position...standard position is 1500....so it is 1500               
+const int LOOP_DELAY = 250;    //I kinda tweaked the delay...this is a delay loop in microseconds between iterations of the loop function ensuring consistent timing
+                 
+const int SERIAL_BAUD_RATE = 9600;    // 9600 Baud ( the most common Baud rate )          
+const int MOTOR_STABILIZATION_TIME = 7000;    //time in ms waited after motor initialization for it to stabalize 
 
 // PID controller parameters
-double dKp = 500, dKi = 5, dKd = 1;
-double depthInput, depthOutput;   // Variables for PID controller
-double depthSetpoint = 0.5;        // Desired depth setpoint (meters)
+const double dkp = 500, dki = 5, dkd = 1;
+double depthInput, depthOutput, depthSetpoint = DEPTH_SETPOINT_DEFAULT;
 
 // Initialize PID controller
-PID depthPID(&depthInput, &depthOutput, &depthSetpoint, dKp, dKi, dKd, DIRECT);
+PID depthPID(&depthInput, &depthOutput, &depthSetpoint, dkp, dki, dkd, DIRECT);
 
 // Servo objects for controlling motors
-Servo top_front;
-Servo top_back;
+Servo topFront, topBack;
 
 // Depth sensor object
 MS5837 depthSensor;
 
-void setup()
-{
-  Wire.begin();                    // Start I2C communication
-  Serial.begin(9600);              // Initialize serial communication for debugging
-  depthPID.SetOutputLimits(-200, 200);  // Set the PID output limits
-  depthPID.SetMode(AUTOMATIC);     // Set PID controller to automatic mode
-  depthSensorSetup();              // Initialize depth sensor
-  motorSetup();                    // Initialize servos
-  Serial.println("ready");         // Indicate that setup is complete
-}
-
-long microseconds;  // Variable to track time in microseconds
-
-void loop()
-{
-  if (Serial.available())
-  {
-    float incomingValue = Serial.parseFloat();  // Read incoming float value from serial
-    if (incomingValue != 0)
-    {
-      depthSetpoint = incomingValue;  // Update depth setpoint if a valid value is received
+void setup() {
+    Wire.begin();
+    Serial.begin(SERIAL_BAUD_RATE);
+    
+    depthPID.SetOutputLimits(-200, 200);
+    depthPID.SetMode(AUTOMATIC);
+    
+    if (!initializeDepthSensor()) {
+        Serial.println("Depth sensor initialization failed. System has been stopped");
+        while (1) {}  // stopping if the sensor cant  initialize
     }
-  }
-  else
-  {
-    long prevMicroseconds = microseconds;  // Store previous time
-    microseconds = micros();  // Update current time
-    depthSensor.read();       // Read depth from sensor
-    depthInput = depthSensor.depth();  // Get depth input for PID
-    depthPID.Compute();       // Compute PID output
-    Serial.print("DepthInput:");  // Print current depth
-    Serial.print(depthInput);
-    Serial.print(",");
-    Serial.print("Setpoint:");    // Print current setpoint
-    Serial.println(depthSetpoint);
-
-    // Write PID output to servos
-    top_back.writeMicroseconds(depthOutput + 1500);
-    top_front.writeMicroseconds(depthOutput + 1500);
-
-    // Maintain a 250 microsecond loop delay
-    while (micros() - microseconds < 250)
-      delayMicroseconds(1);
-  }
+    
+    initializeMotors();
+    Serial.println("System ready");
 }
 
-void depthSensorSetup() 
-{
-    depthSensor.setModel(MS5837::MS5837_02BA);  // Set the sensor model
+void loop() {
+    static unsigned long lastMicros = 0;
+    unsigned long currentMicros = micros();
+
+    if (Serial.available()) {
+        processSerialInput();
+    } else {
+        updateDepthControl();
+        printDebugInfo();
+        writeToServos();
+        
+        // Maintain consistent loop timing
+        while (micros() - currentMicros < LOOP_DELAY) {
+            delayMicroseconds(1);
+        }
+        lastMicros = currentMicros;
+    }
+}
+
+bool initializeDepthSensor() {
+    depthSensor.setModel(MS5837::MS5837_02BA);
     if (!depthSensor.init()) {
-        Serial.println("Failed to initialize depth sensor!");  // Error message if initialization fails
+        return false;
     }
-    depthSensor.setFluidDensity(997);  // Set fluid density for the sensor (freshwater)
+    depthSensor.setFluidDensity(997);  // freshwater
+    return true;
 }
 
-void motorSetup()
-{
-  top_front.attach(5);   // Attach top front servo to pin 5
-  top_back.attach(2);    // Attach top back servo to pin 2
-  top_front.writeMicroseconds(1500);  // Set initial position of top front servo
-  top_back.writeMicroseconds(1500);   // Set initial position of top back servo
-  delay(7000);  // Wait 7 seconds to stabilize servos
+void initializeMotors() {
+    topFront.attach(5);
+    topBack.attach(2);
+    topFront.writeMicroseconds(SERVO_CENTER);
+    topBack.writeMicroseconds(SERVO_CENTER);
+    delay(MOTOR_STABILIZATION_TIME);
+}
+
+void processSerialInput() {
+    float incomingValue = Serial.parseFloat();
+    if (incomingValue != 0) {
+        depthSetpoint = incomingValue;
+        Serial.print("New depth setpoint: ");
+        Serial.println(depthSetpoint);
+    }
+}
+
+void updateDepthControl() {
+    depthSensor.read();
+    depthInput = depthSensor.depth();
+    depthPID.Compute();
+}
+
+void printDebugInfo() {
+    Serial.print("DepthInput:");
+    Serial.print(depthInput);
+    Serial.print(",Setpoint:");
+    Serial.println(depthSetpoint);
+}
+
+void writeToServos() {
+    int servoValue = static_cast<int>(depthOutput) + SERVO_CENTER;
+    topBack.writeMicroseconds(servoValue);
+    topFront.writeMicroseconds(servoValue);
 }
