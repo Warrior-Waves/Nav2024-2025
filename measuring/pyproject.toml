@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "measuring"
+version = "0.1.0"
+description = "Measures stuff from photos"
+authors = ["KashishKap <kashishkapoorca@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+opencv-python = "^4.9.0.80"
+numpy = "^1.26.4"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
